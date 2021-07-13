@@ -1,0 +1,450 @@
+## Clean up=====
+rm(list=ls()) # delete everything in your global environment and garbage collect occasionally to maintain the highest efficiency possible. Only do this when you've saved all of your data that you might use to your computer. This step will erase any data stored in R Studio.
+gc()
+#=======
+set.seed(123) # This tells R where to begin along a random number line. By setting where R begins, you can reproduce results if you need to.
+
+library(beepr) # this is a handy package that you can use to alert yourself when the code has finished. It is not necessary and can be removed, though the beep() functions below would also need to be removed.
+
+##wd for data input
+setwd("/where/our/u-series/data/is") # I use a mac. if you use a pc, how you will need to include the drive (i.e. C/)
+# Excel file needs to have the following column headers (order doesn't matter):
+# Depth (m), R234U_238U, R48_2SE, R230Th_238U, R08_2SE
+# rows need to be ordered by increasing depth
+df <- read.csv("Our_useries_data.csv") # this calls in our data we've stored in a csv format. any format is okay to use, you'll just have to modify how it is called in.
+nb_sample <- nrow(df) #nb of sampels to solve
+nbit <- 1e6 # nb of iterations for the simulation
+# range of values allowed for (234U/238U) at t = 0; =====
+#generally one value is 1 and the other is the value in the bedrock if known
+r48i_min <- df[max(nb_sample),2]-2*df[max(nb_sample),3]
+r48i_max <- df[max(nb_sample),2]+2*df[max(nb_sample),3]
+# range of values allowed for (230Th/238U) at t = 0; =====
+#generally one value is 1 and the other is the value in the bedrock if known
+r08i_min <- df[max(nb_sample),4]-2*df[max(nb_sample),5]
+r08i_max <- df[max(nb_sample),4]+2*df[max(nb_sample),5]
+# range of values allowed for log of oldest weathering age, T =====
+logT_min <- 1
+logT_max <- 7
+# range of values allowed for multiplier between weathering ages=====
+#(i.e. assume that younger ages in the profile are a fraction of the oldest weathering age)
+Tmult_min <- .5 
+Tmult_max <- 1
+# range of values allowed for log(k238)=====
+logk238_min <- -7 # min 
+logk238_max <- -5 # max
+# range of values allowed for (k234/k238)=====
+k48_min <- .5
+k48_max <- 10
+# range of values allowed for log(f238/k238)=====
+logf238_k238_min <- -8
+logf238_k238_max <- -2
+# range of values allowed for f234/f238=====
+f48_min <- 2
+f48_max <- 10
+# values for 230Th and 232Th are set=====
+k230 <- 1e-10
+k232 <- 1e-10
+f230 <- 1e-10
+f232 <- 1e-10
+
+# decay constants=====
+l238 <- 0.1551e-9
+l234 <- 2.826e-6
+l232 <- 4.948e-11
+l230 <- 9.158e-6
+
+# U concentration at t=0 (in ppm); value doesn't matter
+U_init <- 5
+### Monte Carlo =====
+# initialise vectors and matrices used in loops
+R48_target <- vector(mode="numeric", length=nb_sample)
+R08_target <- vector(mode="numeric", length=nb_sample)
+R48_err <- vector(mode="numeric", length=nb_sample)
+R08_err <- vector(mode="numeric", length=nb_sample)
+depth <- vector(mode="numeric", length=nb_sample)
+T <- vector(mode="numeric", length=nb_sample)
+err_T <- vector(mode="numeric", length=nb_sample)
+R48_calc <- vector(mode="numeric", length=nb_sample)
+R08_calc <- vector(mode="numeric", length=nb_sample)
+f <- vector(mode="numeric", length=nbit)
+output_T <- matrix(, nrow = nbit, ncol = nb_sample)
+output_param <- matrix(, nrow = nbit, ncol = 5+nb_sample)
+output_R48_calc <- matrix(, nrow = nbit, ncol = nb_sample)
+output_R08_calc <- matrix(, nrow = nbit, ncol = nb_sample)
+output_Ri <- matrix(, nrow = nbit, ncol = 2)
+
+for (j in 1:nb_sample){
+  R48_target[j] <- df$X.234U.238U.[j]
+  R08_target[j] <- df$X.230Th.238U.[j]
+  depth[j] <- df$Depth..mm.[j]
+  R48_err[j] <- df$X2SE[j]
+  R08_err[j] <- df$X2SE.1[j]
+}
+
+target_ratios <- rbind(depth, R48_target, R48_err, R08_target, R08_err)
+target_ratios <- as.data.frame(t(target_ratios))
+
+max_f <- sum((R48_err)^2 + (R08_err)^2)
+
+# repeat simulation 'nbit' number of times for a given sample
+nruns=30
+solution_store<-matrix(NA,nrow=6,ncol=nruns)
+solution_T_store<-matrix(NA,nb_sample,nruns)
+solution_R48_store<-matrix(NA,nb_sample,nruns)
+solution_R08_store<-matrix(NA,nb_sample,nruns)
+for(h in 1:nruns){
+  
+  
+  
+  
+  
+  for (i in 1:nbit){
+    print(i)
+    r48i <- runif(1, r48i_min, r48i_max)
+    r08i <- runif(1, r08i_min, r08i_max)
+    
+    r04i <- r08i/r48i
+    U8i <- U_init*1e-6/l238*6.02e23
+    U4i <- r48i*l238/l234*U8i   
+    Th0i <- r04i*l234/l230*U4i
+    
+    k238 <-  10^runif(1, logk238_min, logk238_max)
+    k234 <- k238*runif(1, k48_min, k48_max)
+    f238 <- k238*10^runif(1, logf238_k238_min, logf238_k238_max)
+    f234 <- f238*runif(1, f48_min, f48_max)
+    
+    F238 <- f238*l238*U8i
+    F234 <- f234*l234*U4i
+    F230 <- f230*l230*Th0i
+    
+    a4 <- l234 + k234
+    a8 <- l238 + k238
+    a0 <- l230 + k230
+    A <- l230*l234/((a0 - a8)*(a4 - a8)) - l230*l234*F238/(l238*U8i*a8*(a4 - a8)*(a0 - a8))
+    B <- l230/(a0 - a4)*r48i - l230*l234/((a0 - a4)*(a4 - a8)) - l230*F234/(l238*U8i*a4*(a0 - a4)) - l230*l234*F238/(l238*U8i*a4*(a0 - a4)*(a4 - a8))
+    C <- r08i - l230/(a0 - a4)*r48i + l230*l234/((a0 - a4)*(a4 - a8)) - l230*l234/((a0 - a8)*(a4 - a8)) - F230/(l238*U8i*a0) - l230*F234/(l238*U8i*a0*a4) + l230*F234/(l238*U8i*a4*(a0 - a4)) - l230*l234*F238/(l238*U8i*a0*a4*a8) + l230*l234*F238/(l238*U8i*a4*a8*(a0 - a4)) - l230*l234*F238/(l238*U8i*a8*(a0 - a4)*(a4 - a8)) + l230*l234*F238/(l238*U8i*a8*(a0 - a8)*(a4 - a8))
+    
+    for (j in 1:nb_sample){
+      if (j == 1){
+        T[j] <-  10^runif(1, logT_min, logT_max)}
+      else {
+        T[j] <- T[j-1]*runif(1, Tmult_min, Tmult_max)
+      }
+      R48_calc[j] <- ((l234/(a4 - a8) - l234*F238/(l238*U8i*a8*(a4 - a8)))*exp(-a8*T[j]) + (r48i - l234/(a4 - a8) + l234*F238/(l238*U8i*a4*(a4 - a8)) - F234/(l238*U8i*a4))*exp(-a4*T[j]) + F234/(l238*U8i*a4) + l234*F238/(l238*U8i*a4*a8))/((1 - F238/(l238*U8i*a8))*exp(-a8*T[j]) + F238/(l238*U8i*a8))
+      R08_calc[j] <- (A*exp(-a8*T[j]) + B*exp(-a4*T[j]) + C*exp(-a0*T[j]) + l230*l234*F238/(l238*U8i*a0*a4*a8) + l230*F234/(l238*U8i*a0*a4) + F230/(l238*U8i*a0))/((1 - F238/(l238*U8i*a8))*exp(-a8*T[j]) + F238/(l238*U8i*a8))
+      # output[i,j] <- T[j]
+    }
+    f <- sum((R48_calc - R48_target)^2 + (R08_calc - R08_target)^2)
+    
+    output_T[i,] <- T
+    output_param[i,] <- c(k238,k234/k238,f238/k238,f234/f238,f,T)
+    output_R48_calc[i,] <- R48_calc
+    output_R08_calc[i,] <- R08_calc
+    output_Ri[i,] <- c(r48i,r08i)
+  }
+  
+  solution <- subset(output_param, output_param[,5] == min(output_param[,5]))
+  solution_T <- subset(output_T, output_param[,5] == min(output_param[,5]))
+  solution_R48 <- subset(output_R48_calc, output_param[,5] == min(output_param[,5]))
+  solution_R08 <- subset(output_R08_calc, output_param[,5] == min(output_param[,5]))
+  
+  # Regolith production rate (mm/a)
+  rate <- (depth[nb_sample]-depth[1])/(solution_T[1] - solution_T[nb_sample])
+  
+  for (j in 1:nb_sample){
+    err_T[j] <- 2*sd(subset(output_T[,j], output_param[,5] < 2*min(output_param[,5])))/
+      sqrt(length(subset(output_T[,j], output_param[,5] < 2*min(output_param[,5]))))
+  }
+  solution_store[,h]<-c(solution[1:5],rate)
+  solution_T_store[,h]<-subset(output_T, output_param[,5] == min(output_param[,5]))
+  solution_R08_store[,h]<-solution_R08
+  solution_R48_store[,h]<-solution_R48
+}
+
+row.names(solution_store)=c("k238","k234/k238","f238/k238","f234/f238","f", "rate")
+row.names(solution_T_store)=row.names(solution_R08_store)=row.names(solution_R48_store)=c("0","120","350","530","750","900","1000","1100","1350","1600","1750","2200")
+colnames(solution_store)=c("Run 1","Run 2","Run 3","Run 4",
+                           "Run 5","Run 6","Run 7","Run 8","Run 9",
+                           "Run 10","Run 11","Run 12","Run 13","Run 14",
+                           "Run 15","Run 16","Run 17","Run 18","Run 19",
+                           "Run 20","Run 21","Run 22","Run 23","Run 24",
+                           "Run 25","Run 26","Run 27","Run 28","Run 29",
+                           "Run 30")
+colnames(solution_T_store)=c("Run 1","Run 2","Run 3","Run 4",
+                             "Run 5","Run 6","Run 7","Run 8","Run 9",
+                             "Run 10","Run 11","Run 12","Run 13","Run 14",
+                             "Run 15","Run 16","Run 17","Run 18","Run 19",
+                             "Run 20","Run 21","Run 22","Run 23","Run 24",
+                             "Run 25","Run 26","Run 27","Run 28","Run 29",
+                             "Run 30")
+colnames(solution_R08_store)=c("Run 1","Run 2","Run 3","Run 4",
+                               "Run 5","Run 6","Run 7","Run 8","Run 9",
+                               "Run 10","Run 11","Run 12","Run 13","Run 14",
+                               "Run 15","Run 16","Run 17","Run 18","Run 19",
+                               "Run 20","Run 21","Run 22","Run 23","Run 24",
+                               "Run 25","Run 26","Run 27","Run 28","Run 29",
+                               "Run 30")
+colnames(solution_R48_store)=c("Run 1","Run 2","Run 3","Run 4",
+                               "Run 5","Run 6","Run 7","Run 8","Run 9",
+                               "Run 10","Run 11","Run 12","Run 13","Run 14",
+                               "Run 15","Run 16","Run 17","Run 18","Run 19",
+                               "Run 20","Run 21","Run 22","Run 23","Run 24",
+                               "Run 25","Run 26","Run 27","Run 28","Run 29",
+                               "Run 30")
+
+
+setwd("/where/our/model/output/goes")# set this directory to the folder where you want your model output to be stored.
+write.csv(solution_store,"model_parameters.csv") #stores the model parameters as a csv
+write.csv(solution_T_store, "model_ages.csv") # stores model ages
+write.csv(solution_R08_store,"model_R08.csv") # stores model R08
+write.csv(solution_R48_store,"model_.csv") # stores model R48
+
+###################################################################
+###################################################################
+###################################################################
+###################################################################
+
+
+# Now begins the trim process. 
+# This process will eventually (current data is 13 July 2021) be automated and available as an applet via RShiny. Once that applet is available, a link will be provided here:
+
+
+###################################################################
+###################################################################
+###################################################################
+###################################################################
+
+mod <- 1.3 # this modifies the error term used to subset the parameter space. A value of 1.3 means that all modelled parameter values that are within 30% of the least most error value will be included in parameter estimatation.
+
+params<-(subset(output_param, output_param[,5]<mod*min(output_param[,5]))) # this stores the model parameters from the previous run in the variable params
+
+age<-params[,6]
+max_age<-log10(max(age))
+min_age<-log10(min(age))
+
+k238<-params[,1]
+
+max_k238<-log10(max(k238))
+min_k238<-log10(min(k238))
+
+k234_k238<-params[,2]
+min_k234_k238<-min(k234_k238)
+max_k234_k238<-max(k234_k238)
+
+
+f238_k238<-params[,3]
+min_f238_k238<-log10(min(f238_k238))
+max_f238_k238<-log10(max(f238_k238))
+
+
+
+f234_f238<-params[,4]
+min_f234_f238<-min(f234_f238)
+max_f234_f238<-max(f234_f238)
+
+#################################
+#################################
+#################################
+#################################
+
+# we have now selected what the next model iteration parameters will be. the following code implements those parameters in place of the original values. in order to use the below code, you will have to have compiled the above parameter selection script then implement the code below. you will need to change the name of the files that are saved to determine when the model converges.
+
+
+#################################
+#################################
+#################################
+
+# now begins the model with updated parameters
+
+##wd for data input
+setwd("/where/our/u-series/data/is") # I use a mac. if you use a pc, how you will need to include the drive (i.e. C/)
+# Excel file needs to have the following column headers (order doesn't matter):
+# Depth (m), R234U_238U, R48_2SE, R230Th_238U, R08_2SE
+# rows need to be ordered by increasing depth
+df <- read.csv("Our_useries_data.csv") # this calls in our data we've stored in a csv format. any format is okay to use, you'll just have to modify how it is called in.
+nb_sample <- nrow(df) #nb of sampels to solve
+nbit <- 1e6 # nb of iterations for the simulation
+# range of values allowed for (234U/238U) at t = 0; =====
+#generally one value is 1 and the other is the value in the bedrock if known
+r48i_min <- df[max(nb_sample),2]-2*df[max(nb_sample),3]
+r48i_max <- df[max(nb_sample),2]+2*df[max(nb_sample),3]
+# range of values allowed for (230Th/238U) at t = 0; =====
+#generally one value is 1 and the other is the value in the bedrock if known
+r08i_min <- df[max(nb_sample),4]-2*df[max(nb_sample),5]
+r08i_max <- df[max(nb_sample),4]+2*df[max(nb_sample),5]
+# range of values allowed for log of oldest weathering age, T =====
+logT_min <- min_age
+logT_max <- max_age
+# range of values allowed for multiplier between weathering ages=====
+#(i.e. assume that younger ages in the profile are a fraction of the oldest weathering age)
+Tmult_min <- .5 
+Tmult_max <- 1
+# range of values allowed for log(k238)=====
+logk238_min <- min_k238 # min 
+logk238_max <- max_k238 # max
+# range of values allowed for (k234/k238)=====
+k48_min <- min_k234_k238
+k48_max <- max_k234_k238
+# range of values allowed for log(f238/k238)=====
+logf238_k238_min <- min_f238_k238
+logf238_k238_max <- max_f238_k238
+# range of values allowed for f234/f238=====
+f48_min <- min_f234_f238
+f48_max <- max_f234_f238
+# values for 230Th and 232Th are set=====
+k230 <- 1e-10
+k232 <- 1e-10
+f230 <- 1e-10
+f232 <- 1e-10
+
+# decay constants=====
+l238 <- 0.1551e-9
+l234 <- 2.826e-6
+l232 <- 4.948e-11
+l230 <- 9.158e-6
+
+# U concentration at t=0 (in ppm); value doesn't matter
+U_init <- 5
+### Monte Carlo =====
+# initialise vectors and matrices used in loops
+R48_target <- vector(mode="numeric", length=nb_sample)
+R08_target <- vector(mode="numeric", length=nb_sample)
+R48_err <- vector(mode="numeric", length=nb_sample)
+R08_err <- vector(mode="numeric", length=nb_sample)
+depth <- vector(mode="numeric", length=nb_sample)
+T <- vector(mode="numeric", length=nb_sample)
+err_T <- vector(mode="numeric", length=nb_sample)
+R48_calc <- vector(mode="numeric", length=nb_sample)
+R08_calc <- vector(mode="numeric", length=nb_sample)
+f <- vector(mode="numeric", length=nbit)
+output_T <- matrix(, nrow = nbit, ncol = nb_sample)
+output_param <- matrix(, nrow = nbit, ncol = 5+nb_sample)
+output_R48_calc <- matrix(, nrow = nbit, ncol = nb_sample)
+output_R08_calc <- matrix(, nrow = nbit, ncol = nb_sample)
+output_Ri <- matrix(, nrow = nbit, ncol = 2)
+
+for (j in 1:nb_sample){
+  R48_target[j] <- df$X.234U.238U.[j]
+  R08_target[j] <- df$X.230Th.238U.[j]
+  depth[j] <- df$Depth..mm.[j]
+  R48_err[j] <- df$X2SE[j]
+  R08_err[j] <- df$X2SE.1[j]
+}
+
+target_ratios <- rbind(depth, R48_target, R48_err, R08_target, R08_err)
+target_ratios <- as.data.frame(t(target_ratios))
+
+max_f <- sum((R48_err)^2 + (R08_err)^2)
+
+# repeat simulation 'nbit' number of times for a given sample
+nruns=30
+solution_store<-matrix(NA,nrow=6,ncol=nruns)
+solution_T_store<-matrix(NA,nb_sample,nruns)
+solution_R48_store<-matrix(NA,nb_sample,nruns)
+solution_R08_store<-matrix(NA,nb_sample,nruns)
+for(h in 1:nruns){
+  
+  
+  
+  
+  
+  for (i in 1:nbit){
+    print(i)
+    r48i <- runif(1, r48i_min, r48i_max)
+    r08i <- runif(1, r08i_min, r08i_max)
+    
+    r04i <- r08i/r48i
+    U8i <- U_init*1e-6/l238*6.02e23
+    U4i <- r48i*l238/l234*U8i   
+    Th0i <- r04i*l234/l230*U4i
+    
+    k238 <-  10^runif(1, logk238_min, logk238_max)
+    k234 <- k238*runif(1, k48_min, k48_max)
+    f238 <- k238*10^runif(1, logf238_k238_min, logf238_k238_max)
+    f234 <- f238*runif(1, f48_min, f48_max)
+    
+    F238 <- f238*l238*U8i
+    F234 <- f234*l234*U4i
+    F230 <- f230*l230*Th0i
+    
+    a4 <- l234 + k234
+    a8 <- l238 + k238
+    a0 <- l230 + k230
+    A <- l230*l234/((a0 - a8)*(a4 - a8)) - l230*l234*F238/(l238*U8i*a8*(a4 - a8)*(a0 - a8))
+    B <- l230/(a0 - a4)*r48i - l230*l234/((a0 - a4)*(a4 - a8)) - l230*F234/(l238*U8i*a4*(a0 - a4)) - l230*l234*F238/(l238*U8i*a4*(a0 - a4)*(a4 - a8))
+    C <- r08i - l230/(a0 - a4)*r48i + l230*l234/((a0 - a4)*(a4 - a8)) - l230*l234/((a0 - a8)*(a4 - a8)) - F230/(l238*U8i*a0) - l230*F234/(l238*U8i*a0*a4) + l230*F234/(l238*U8i*a4*(a0 - a4)) - l230*l234*F238/(l238*U8i*a0*a4*a8) + l230*l234*F238/(l238*U8i*a4*a8*(a0 - a4)) - l230*l234*F238/(l238*U8i*a8*(a0 - a4)*(a4 - a8)) + l230*l234*F238/(l238*U8i*a8*(a0 - a8)*(a4 - a8))
+    
+    for (j in 1:nb_sample){
+      if (j == 1){
+        T[j] <-  10^runif(1, logT_min, logT_max)}
+      else {
+        T[j] <- T[j-1]*runif(1, Tmult_min, Tmult_max)
+      }
+      R48_calc[j] <- ((l234/(a4 - a8) - l234*F238/(l238*U8i*a8*(a4 - a8)))*exp(-a8*T[j]) + (r48i - l234/(a4 - a8) + l234*F238/(l238*U8i*a4*(a4 - a8)) - F234/(l238*U8i*a4))*exp(-a4*T[j]) + F234/(l238*U8i*a4) + l234*F238/(l238*U8i*a4*a8))/((1 - F238/(l238*U8i*a8))*exp(-a8*T[j]) + F238/(l238*U8i*a8))
+      R08_calc[j] <- (A*exp(-a8*T[j]) + B*exp(-a4*T[j]) + C*exp(-a0*T[j]) + l230*l234*F238/(l238*U8i*a0*a4*a8) + l230*F234/(l238*U8i*a0*a4) + F230/(l238*U8i*a0))/((1 - F238/(l238*U8i*a8))*exp(-a8*T[j]) + F238/(l238*U8i*a8))
+      # output[i,j] <- T[j]
+    }
+    f <- sum((R48_calc - R48_target)^2 + (R08_calc - R08_target)^2)
+    
+    output_T[i,] <- T
+    output_param[i,] <- c(k238,k234/k238,f238/k238,f234/f238,f,T)
+    output_R48_calc[i,] <- R48_calc
+    output_R08_calc[i,] <- R08_calc
+    output_Ri[i,] <- c(r48i,r08i)
+  }
+  
+  solution <- subset(output_param, output_param[,5] == min(output_param[,5]))
+  solution_T <- subset(output_T, output_param[,5] == min(output_param[,5]))
+  solution_R48 <- subset(output_R48_calc, output_param[,5] == min(output_param[,5]))
+  solution_R08 <- subset(output_R08_calc, output_param[,5] == min(output_param[,5]))
+  
+  # Regolith production rate (mm/a)
+  rate <- (depth[nb_sample]-depth[1])/(solution_T[1] - solution_T[nb_sample])
+  
+  for (j in 1:nb_sample){
+    err_T[j] <- 2*sd(subset(output_T[,j], output_param[,5] < 2*min(output_param[,5])))/
+      sqrt(length(subset(output_T[,j], output_param[,5] < 2*min(output_param[,5]))))
+  }
+  solution_store[,h]<-c(solution[1:5],rate)
+  solution_T_store[,h]<-subset(output_T, output_param[,5] == min(output_param[,5]))
+  solution_R08_store[,h]<-solution_R08
+  solution_R48_store[,h]<-solution_R48
+}
+
+row.names(solution_store)=c("k238","k234/k238","f238/k238","f234/f238","f", "rate")
+row.names(solution_T_store)=row.names(solution_R08_store)=row.names(solution_R48_store)=c("0","120","350","530","750","900","1000","1100","1350","1600","1750","2200")
+colnames(solution_store)=c("Run 1","Run 2","Run 3","Run 4",
+                           "Run 5","Run 6","Run 7","Run 8","Run 9",
+                           "Run 10","Run 11","Run 12","Run 13","Run 14",
+                           "Run 15","Run 16","Run 17","Run 18","Run 19",
+                           "Run 20","Run 21","Run 22","Run 23","Run 24",
+                           "Run 25","Run 26","Run 27","Run 28","Run 29",
+                           "Run 30")
+colnames(solution_T_store)=c("Run 1","Run 2","Run 3","Run 4",
+                             "Run 5","Run 6","Run 7","Run 8","Run 9",
+                             "Run 10","Run 11","Run 12","Run 13","Run 14",
+                             "Run 15","Run 16","Run 17","Run 18","Run 19",
+                             "Run 20","Run 21","Run 22","Run 23","Run 24",
+                             "Run 25","Run 26","Run 27","Run 28","Run 29",
+                             "Run 30")
+colnames(solution_R08_store)=c("Run 1","Run 2","Run 3","Run 4",
+                               "Run 5","Run 6","Run 7","Run 8","Run 9",
+                               "Run 10","Run 11","Run 12","Run 13","Run 14",
+                               "Run 15","Run 16","Run 17","Run 18","Run 19",
+                               "Run 20","Run 21","Run 22","Run 23","Run 24",
+                               "Run 25","Run 26","Run 27","Run 28","Run 29",
+                               "Run 30")
+colnames(solution_R48_store)=c("Run 1","Run 2","Run 3","Run 4",
+                               "Run 5","Run 6","Run 7","Run 8","Run 9",
+                               "Run 10","Run 11","Run 12","Run 13","Run 14",
+                               "Run 15","Run 16","Run 17","Run 18","Run 19",
+                               "Run 20","Run 21","Run 22","Run 23","Run 24",
+                               "Run 25","Run 26","Run 27","Run 28","Run 29",
+                               "Run 30")
+
+
+setwd("/where/our/model/output/goes")# set this directory to the folder where you want your model output to be stored.
+write.csv(solution_store,"model_parameters.csv") #stores the model parameters as a csv
+write.csv(solution_T_store, "model_ages.csv") # stores model ages
+write.csv(solution_R08_store,"model_R08.csv") # stores model R08
+write.csv(solution_R48_store,"model_.csv") # stores model R48
