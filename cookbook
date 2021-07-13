@@ -1,0 +1,45 @@
+Step 1
+
+Access the R code. The current code can be found here.
+
+Step 2
+
+At line 10, set your working directory to where on your computer you have the U-series data stored. This data will need to have the depth measurements in units of mm in order for the code to work correctly.
+
+Step 3
+
+At line 14, enter your file’s name and load it according to the file type. Here, I loaded a csv so used read.csv(). If you want to load an excel spreadsheet, you will need to download the appropriate package and read in the file at line 14 using the appropriate function.
+
+Step 4
+
+At line 196, set the working directory where you want the model output data to go.
+
+Step 5
+
+At lines 197:200, name the files that will be generated.
+
+Step 6
+
+Run lines 5:200.
+
+Step 7
+
+After the script is finished running, run lines 217:243. 
+
+This chunk of script refines the parameter ranges considered in the model according to a modifier term (mod). The minimum error term is increased by mod (values must be > 1) to subset the model output. The maximum and minimum values (defined by mod) are stored in lines 217:243 and are then called in the subsequent code.
+
+Step 8
+
+At lines 446:450, modify the model output file name appropriately.
+
+Step 9
+
+Run lines 260:250.
+
+Step 10
+
+Repeat steps 7:9 until a stable solution is obtained. 
+
+Notes:
+
+The current approach used for assessing stability is to compare the spread of output between subsequent iterations via the standard deviation of the soil production rate (σ_SPR) calculated from the 30 model outputs generated per iteration. σ_SPR will typically decrease with increasing numbers of iterations however the exact value will locally fluctuate in part because only the most recent model is being used to modify the subsequent 30 model calculations (as opposed to the averaged outputs from the prior 30 models). It is important to allow for this random fluctuation to occur to help ensure that the trimming process does not focus the solutions generated i
